@@ -5,7 +5,7 @@ from datasets import load_dataset, DatasetDict
 from transformers import (AutoConfig, AutoModel, AutoModelForSeq2SeqLM, AutoModelForQuestionAnswering,
                           AutoTokenizer, pipeline, get_scheduler,
                           DataCollatorForSeq2Seq, DataCollatorWithPadding, MBartTokenizer, 
-                          MBartTokenizerFast, default_data_collator, EvalPrediction)
+                          MBartTokenizerFast, default_data_collator, EvalPrediction, Adafactor)
 import evaluate
 import torch
 import os
@@ -20,34 +20,17 @@ import numpy as np
 import random
 import json
 import os
+import shutil
+import sacrebleu #for translation
+from rouge_score import rouge_scorer, scoring #for summarization
+from mybertmodel import load_QAbertmodel
+import argparse
+
 valkey="test"#"validation"
 version_2_with_negative = True #squad_v2 or squad
 #Dualevaluation=True
 from utils_qa import preprocess_squad_batch, updateopenQAvalinputs, \
     postprocess_qa_predictions, create_and_fill_np_array, updateQAtraininputs, updateQAvalinputs
-
-
-#https://huggingface.co/facebook/wmt21-dense-24-wide-en-x
-# model = AutoModelForSeq2SeqLM.from_pretrained("facebook/wmt21-dense-24-wide-en-x")
-# tokenizer = AutoTokenizer.from_pretrained("facebook/wmt21-dense-24-wide-en-x")
-
-# inputs = tokenizer("To translate into a target language, the target language id is forced as the first generated token. To force the target language id as the first generated token, pass the forced_bos_token_id parameter to the generate method.", return_tensors="pt")
-
-# # translate English to Chinese
-# generated_tokens = model.generate(**inputs, forced_bos_token_id=tokenizer.get_lang_id("zh")) #max_new_tokens
-# result=tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
-# print(result)
-
-# model_checkpoint = "Helsinki-NLP/opus-mt-en-fr"
-# translator = pipeline("translation", model=model_checkpoint)
-# print(translator("Default to expanded threads"))
-
-# from transformers import AutoTokenizer
-
-# model_checkpoint = "Helsinki-NLP/opus-mt-en-fr"
-# tokenizer = AutoTokenizer.from_pretrained(model_checkpoint, return_tensors="pt")
-# from transformers import AutoModelForSeq2SeqLM
-# model = AutoModelForSeq2SeqLM.from_pretrained(model_checkpoint)
 
 def modelparameters(model, unfreezename=""):
     if unfreezename:
@@ -59,7 +42,6 @@ def modelparameters(model, unfreezename=""):
     for name, param in model.named_parameters():
         print(name, param.requires_grad)
 
-from mybertmodel import load_QAbertmodel
 def loadmodel(model_checkpoint, task="QA", mycache_dir="", pretrained="", hpc=True, unfreezename=""):
     if model_checkpoint.startswith('my'):
         model, tokenizer = load_QAbertmodel()
@@ -214,6 +196,10 @@ def loaddata(args, USE_HPC):
                 task_column ="question"
                 text_column = "context"
                 target_column = "answers"
+            elif args.data_name == 'samsum':
+                raw_datasets = load_dataset('samsum')
+                text_column = 'dialogue'
+                target_column = 'summary'
             else: 
                 #raw_datasets = load_dataset(args.data_name, args.dataconfig) #dataconfig="train_asks[:5000]"
                 raw_datasets = load_dataset(args.data_name)
@@ -273,7 +259,9 @@ def get_myoptimizer(model, learning_rate=2e-5, weight_decay=0.0):
             "weight_decay": 0.0,
         },
     ]
-    optimizer = torch.optim.AdamW(optimizer_grouped_parameters, lr=learning_rate)
+
+    # optimizer = torch.optim.AdamW(optimizer_grouped_parameters, lr=learning_rate)
+    optimizer = Adafactor(model.parameters(), scale_parameter=False, relative_step=False,  lr=learning_rate)
     return optimizer
 
 def compute_metrics(eval_preds):
@@ -326,8 +314,7 @@ def postprocess(predictions, labels, task="translation", ignore_pad_token_for_lo
         decoded_labels = ["\n".join(nltk.sent_tokenize(label)) for label in decoded_labels]
     return decoded_preds, decoded_labels
 
-import sacrebleu #for translation
-from rouge_score import rouge_scorer, scoring #for summarization
+
 #ref: https://github.com/huggingface/datasets/blob/main/metrics/rouge/rouge.py
 #ref: https://github.com/google-research/google-research/blob/master/rouge/scoring.py
 class myRouge:
@@ -355,8 +342,6 @@ class myRouge:
             for key in self.scores[0]:
                 result[key] = [score[key] for score in self.scores]
         return result
-
-
 
 class myEvaluator:
     def __init__(self, args, useHFevaluator=False, dualevaluator=False):
@@ -400,7 +385,8 @@ class myEvaluator:
                             }
                 elif self.task=="summarization":
                     results = self.localscorer._compute(predictions, references)
-                print("Local evaluator:", results)
+                    print("Local evaluator:", results)
+
         else: #evaluate the whole dataset
             if self.useHFevaluator==True or self.dualevaluator==True:
                 if self.task == "translation":
@@ -425,6 +411,7 @@ class myEvaluator:
                 elif self.task=="summarization":
                     results = self.localscorer._compute(self.preds, self.refs)
                 print("Local evaluator:", results)
+        
         return results
     
     def add_batch(self, predictions, references):
@@ -672,9 +659,6 @@ def evaluateQA_dataset(model, eval_dataloader, eval_dataset, raw_datasets, devic
     #print(f"epoch {epoch}, evaluation result:", result)
     return result
 
-
-
-import shutil
 def savemodels(model, optimizer, epoch, trainoutput):
     modelfilepath=os.path.join(trainoutput, 'savedmodel.pth')
     torch.save({
@@ -689,7 +673,6 @@ def savemodels(model, optimizer, epoch, trainoutput):
 
 #data_name="imdb", dataconfig="", model_checkpoint="distilbert-base-uncased"
 if __name__ == "__main__":
-    import argparse
     parser = argparse.ArgumentParser(description='simple distributed training job')
     parser.add_argument('--data_type', type=str, default="huggingface",
                     help='data type name: huggingface, custom')
@@ -705,9 +688,9 @@ if __name__ == "__main__":
                     help='Model checkpoint name from HF, t5-base, mybert, distilbert-base-uncased, t5-small, t5-base, Helsinki-NLP/opus-mt-en-zh, Helsinki-NLP/opus-mt-en-fr, t5-small, facebook/wmt21-dense-24-wide-en-x')
     parser.add_argument('--task', type=str, default="translation",
                     help='NLP tasks: openqa, translation, summarization, QA')
-    parser.add_argument('--hfevaluate', default=False, action='store_true',
+    parser.add_argument('--hfevaluate', default=True, action='store_true',
                     help='perform evaluation via HFevaluate or localevaluate')
-    parser.add_argument('--dualevaluate', default=True, action='store_true',
+    parser.add_argument('--dualevaluate', default=False, action='store_true',
                     help='perform evaluation via HFevaluate and localevaluate')
     parser.add_argument("--source_lang", type=str, default="en", help="Source language id for translation.")
     parser.add_argument("--target_lang", type=str, default="zh", help="Target language id for translation.")
@@ -787,6 +770,8 @@ if __name__ == "__main__":
             "passed to ``model.generate``, which is used during ``evaluate`` and ``predict``."
         ),
     )
+
+    # Parse the argumen
     args = parser.parse_args()
 
     print("useHFevaluator:", args.hfevaluate)
@@ -827,7 +812,7 @@ if __name__ == "__main__":
         trainoutput="/data/cmpe249-fa23/trainoutput/huggingface"
         #taskname=args.traintag #"eli5asksciencemodeling"
     else:
-        trainoutput=args.outputdir #"./output"
+        trainoutput = args.outputdir #"./output"
         #taskname=args.traintag #taskname="eli5asksciencemodeling"
         mycache_dir=args.cache_path
         os.environ['TRANSFORMERS_CACHE'] = mycache_dir
@@ -1040,9 +1025,13 @@ if __name__ == "__main__":
         eval_dataloader = DataLoader(
             eval_dataset, collate_fn=data_collator, batch_size=args.batch_size
         )
-
-    #optimizer = AdamW(model.parameters(), lr=2e-5)
-    optimizer = get_myoptimizer(model, learning_rate=args.learningrate)
+    
+    # If using T-5 model, best to use Adafactor to finetune
+    if args.data_name.startswith('t5'):
+        optimizer = Adafactor(params=model.parameters(), scale_parameter=False, relative_step=False,  lr=args.learning_rate)
+    else:
+        #optimizer = AdamW(model.parameters(), lr=2e-5)
+        optimizer = get_myoptimizer(model, learning_rate=args.learningrate)
 
     num_train_epochs = args.total_epochs
     #num_update_steps_per_epoch = len(train_dataloader)
@@ -1099,6 +1088,7 @@ if __name__ == "__main__":
                 outputs = model(**batch)
                 loss = outputs.loss
                 loss = loss / args.gradient_accumulation_steps
+
                 if not use_accelerator:
                     loss.backward()
                 else:
