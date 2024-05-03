@@ -235,14 +235,9 @@ def loaddata(args, USE_HPC):
                 trainlen = int(min(args.subset, len(raw_datasets["train"])))
                 testlen = int(trainlen/10)
             print("trainlen:", trainlen)
-            raw_datasets["train"] = raw_datasets["train"].shuffle(seed=42).select([i for i in list(range(trainlen))])
-            raw_datasets[valkey] = raw_datasets[valkey].shuffle(seed=42).select([i for i in list(range(testlen))])
-    
-        #limit the evaluation set size
-        maxtestlen = 5000
-        if len(raw_datasets[valkey])>maxtestlen:
-            raw_datasets[valkey] = raw_datasets[valkey].shuffle(seed=42).select([i for i in list(range(maxtestlen))])
-
+            raw_datasets["train"] = raw_datasets["train"].shuffle(seed=42).select([i for i in range(trainlen)])
+            raw_datasets[valkey] = raw_datasets[valkey].shuffle(seed=42).select([i for i in range(min(testlen, 5000))])
+            
     return raw_datasets, text_column, target_column, task_column
 
 def get_myoptimizer(model, learning_rate=2e-5, weight_decay=0.0):
