@@ -1,0 +1,1 @@
+python3 /home/jv/DeepDataMiningLearning/nlp/huggingfaceSequence5.py --data_type huggingface --data_name samsum --dataconfig /data/huggingcache --task summarization --model_checkpoint t5-small --traintag t5-small  --outputdir ./model_output/ --cache_path ./cache --unfreezename decoder.block.5. --total_epochs 10 --learningrate 0.001 --save_every 1

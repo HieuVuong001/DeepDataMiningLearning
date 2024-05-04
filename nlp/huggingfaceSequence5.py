@@ -1,11 +1,14 @@
 #huggingfaceSequence5, add open ended question and answering
 #huggingfaceSequence4: created on 11/26, add QA
 #Sequence3:created on 11/24, plan to add summarization
+import comet_ml
+from comet_ml import Experiment
+from comet_ml.integration.pytorch import log_model
 from datasets import load_dataset, DatasetDict
 from transformers import (AutoConfig, AutoModel, AutoModelForSeq2SeqLM, AutoModelForQuestionAnswering,
                           AutoTokenizer, pipeline, get_scheduler,
                           DataCollatorForSeq2Seq, DataCollatorWithPadding, MBartTokenizer, 
-                          MBartTokenizerFast, default_data_collator, EvalPrediction, Adafactor)
+                          MBartTokenizerFast, default_data_collator, EvalPrediction, Adafactor, GenerationConfig)
 import evaluate
 import torch
 import os
@@ -19,12 +22,25 @@ import collections
 import numpy as np
 import random
 import json
-import os
 import shutil
 import sacrebleu #for translation
 from rouge_score import rouge_scorer, scoring #for summarization
 from mybertmodel import load_QAbertmodel
 import argparse
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
+comet_ml.init(api_key=os.getenv('API_KEY'))
+
+experiment = comet_ml.Experiment(
+    api_key= os.getenv('API_KEY'),
+    project_name='test',
+    workspace='jv1'
+)
+
+experiment.set_name('t5-small')
 
 valkey="test"#"validation"
 version_2_with_negative = True #squad_v2 or squad
@@ -83,6 +99,7 @@ def loadmodel(model_checkpoint, task="QA", mycache_dir="", pretrained="", hpc=Tr
     print(f"'>>> Model number of parameters: {round(model_num_parameters)}M'")
     #print(f"'>>> BERT number of parameters: 110M'")
     modelparameters(model, unfreezename)
+
     return model, tokenizer, starting_epoch
 
 # max_length = 128
@@ -237,7 +254,7 @@ def loaddata(args, USE_HPC):
             print("trainlen:", trainlen)
             raw_datasets["train"] = raw_datasets["train"].shuffle(seed=42).select([i for i in range(trainlen)])
             raw_datasets[valkey] = raw_datasets[valkey].shuffle(seed=42).select([i for i in range(min(testlen, 5000))])
-            
+
     return raw_datasets, text_column, target_column, task_column
 
 def get_myoptimizer(model, learning_rate=2e-5, weight_decay=0.0):
@@ -853,6 +870,7 @@ if __name__ == "__main__":
     raw_datasets, text_column, target_column, task_column = loaddata(args, USE_HPC)
     column_names = raw_datasets["train"].column_names
     print("column_names:", column_names) #['translation']
+    print(raw_datasets)
     padding = "max_length" if args.pad_to_max_length else False
     # Temporarily set max_target_length (max_answer_length) for training.
     max_target_length = args.max_target_length
@@ -1034,12 +1052,14 @@ if __name__ == "__main__":
     num_training_steps = num_train_epochs * num_update_steps_per_epoch
     completed_steps = starting_epoch * num_update_steps_per_epoch
 
-    lr_scheduler = get_scheduler(
-        "linear",
-        optimizer=optimizer,
-        num_warmup_steps=0,
-        num_training_steps=num_training_steps,
-    )
+    # Only add this if model is not t5
+    # if not args.data_name.startswith('t5'):
+    #     lr_scheduler = get_scheduler(
+    #         "linear",
+    #         optimizer=optimizer,
+    #         num_warmup_steps=0,
+    #         num_training_steps=num_training_steps,
+    #     )
 
     if use_accelerator:
         #accelerator = Accelerator(mixed_precision="fp16", gradient_accumulation_steps=2)
@@ -1091,7 +1111,7 @@ if __name__ == "__main__":
 
                 if step % args.gradient_accumulation_steps == 0 or step == len(train_dataloader) - 1:
                     optimizer.step()
-                    lr_scheduler.step()
+                    # lr_scheduler.step()
                     optimizer.zero_grad()
                     progress_bar.update(1)
                     completed_steps += 1
@@ -1108,6 +1128,9 @@ if __name__ == "__main__":
             #print(f"epoch {epoch}, BLEU score: {results['score']:.2f}")
             print(f"epoch {epoch}, evaluation metric: {metric.metricname}")
             print("Evaluation result:", results)
+            # for metric_name, metric_value in results.items():
+            #     experiment.log_metric(name=metric_name, value=metric_value)
+            experiment.log_metrics(results)
             #print(evalresults['score'])
             # Save the results
             with open(os.path.join(trainoutput, f"epoch{epoch}_"+"eval_results.json"), "w") as f:
@@ -1127,7 +1150,7 @@ if __name__ == "__main__":
                 savemodels(model, optimizer, epoch, trainoutput)
                 tokenizer.save_pretrained(trainoutput)
 
-    del model, optimizer, lr_scheduler
+    # del model, optimizer, lr_scheduler
+    del model, optimizer
     if use_accelerator:
         accelerator.free_memory()
-

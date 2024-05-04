@@ -1,0 +1,1 @@
+python3 /home/jv/DeepDataMiningLearning/nlp/huggingfaceSequence5.py --data_type huggingface --data_name squad_v2 --dataconfig /data/huggingcache --task QA --model_checkpoint distilbert-base-uncased --traintag test --outputdir ./model_output/ --cache_path ./cache --unfreezename distilbert.transformer.layer.5

@@ -1,0 +1,1 @@
+python3 /home/jv/DeepDataMiningLearning/nlp/huggingfaceSequence5.py --data_type huggingface --data_name billsum --dataconfig /data/huggingcache --task summarization --model_checkpoint t5-small --traintag test --outputdir ./model_output/ --cache_path ./cache --unfreezename decoder.block.5. --subset 100 --total_epochs 10
