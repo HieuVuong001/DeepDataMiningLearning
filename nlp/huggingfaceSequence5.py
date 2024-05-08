@@ -272,8 +272,7 @@ def get_myoptimizer(model, learning_rate=2e-5, weight_decay=0.0):
         },
     ]
 
-    # optimizer = torch.optim.AdamW(optimizer_grouped_parameters, lr=learning_rate)
-    optimizer = Adafactor(model.parameters(), scale_parameter=False, relative_step=False,  lr=learning_rate)
+    optimizer = torch.optim.AdamW(optimizer_grouped_parameters, lr=learning_rate)
     return optimizer
 
 def compute_metrics(eval_preds):
@@ -1040,10 +1039,9 @@ if __name__ == "__main__":
         )
     
     # If using T-5 model, best to use Adafactor to finetune
-    if args.data_name.startswith('t5'):
-        optimizer = Adafactor(params=model.parameters(), scale_parameter=False, relative_step=False,  lr=args.learning_rate)
+    if args.model_checkpoint.startswith('t5'):
+        optimizer = Adafactor(params=model.parameters(), scale_parameter=False, relative_step=False,  lr=args.learningrate)
     else:
-        #optimizer = AdamW(model.parameters(), lr=2e-5)
         optimizer = get_myoptimizer(model, learning_rate=args.learningrate)
 
     num_train_epochs = args.total_epochs
